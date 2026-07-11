@@ -299,6 +299,48 @@
             opacity: 1;
             transform: translateX(-50%) translateY(0);
         }
+
+        /* --- History Tab Styles --- */
+        .history-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .history-search {
+            flex: 1;
+            min-width: 180px;
+            margin: 0;
+        }
+        .history-item {
+            margin-bottom: 16px;
+            padding: 14px;
+            border-radius: 10px;
+            background: var(--input-bg);
+            border: 1px solid var(--border);
+        }
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .history-time {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+        .clear-history-btn {
+            width: auto;
+            background: var(--error-bg);
+            color: var(--error-text);
+            border: 1px solid var(--error-border);
+            white-space: nowrap;
+        }
+        .clear-history-btn:hover {
+            background: var(--error-border);
+        }
     </style>
 </head>
 <body>
@@ -324,7 +366,7 @@
     <div class="tabs">
         <button class="tab active" onclick="switchTab('lookup')">Gamertag Lookup</button>
         <button class="tab" onclick="switchTab('convert')">Manual Converter</button>
-        <button class="tab" onclick="switchTab('reverse')">Reverse Lookup</button>
+        <button class="tab" onclick="switchTab('history')">History</button>
     </div>
 
     <!-- Lookup Tab -->
@@ -354,19 +396,14 @@
         </div>
     </div>
 
-    <!-- Reverse Lookup Tab -->
-    <div id="reverse-tab" class="tab-content">
-        <p class="desc">Enter Decimal XUID, Hex XUID, or Floodgate UUID to find the Gamertag</p>
-        <div class="input-group">
-            <input type="text" id="reverse-input" placeholder="e.g. 2533274956352987 / 23456789ABCDEF / 00000000-...">
-            <button onclick="reverseLookup()">🔄 Reverse Search</button>
+    <!-- History Tab -->
+    <div id="history-tab" class="tab-content">
+        <p class="desc">All previous Gamertag Lookup results are stored here</p>
+        <div class="history-controls">
+            <input type="text" id="historySearch" class="history-search" placeholder="Search gamertag or XUID..." oninput="renderHistory()">
+            <button class="clear-history-btn" onclick="clearHistory()">🗑️ Clear All</button>
         </div>
-        <div id="reverse-result" class="result">
-            <div id="reverse-text"></div>
-        </div>
-        <div class="note">
-            ℹ️ Works with XUID formats and Floodgate UUIDs. Data from GeyserMC and MCProfile APIs.
-        </div>
+        <div id="history-content"></div>
     </div>
 </div>
 
@@ -490,6 +527,75 @@ function escapeHtml(str) {
 }
 
 // --------------------------
+// History Management
+// --------------------------
+function saveToHistory(data) {
+    const history = JSON.parse(localStorage.getItem('lookupHistory')) || [];
+    // Add timestamp
+    data.timestamp = new Date().toISOString();
+    // Avoid duplicate entries
+    const exists = history.some(item => 
+        item.gamertag === data.gamertag && item.xuid === data.xuid
+    );
+    if (!exists) {
+        history.unshift(data); // Newest first
+        localStorage.setItem('lookupHistory', JSON.stringify(history));
+    }
+}
+
+function renderHistory() {
+    const history = JSON.parse(localStorage.getItem('lookupHistory')) || [];
+    const searchTerm = document.getElementById('historySearch').value.trim().toLowerCase();
+    const container = document.getElementById('history-content');
+
+    // Filter results if search term exists
+    const filtered = searchTerm 
+        ? history.filter(item =>
+            item.gamertag.toLowerCase().includes(searchTerm) ||
+            item.xuid.includes(searchTerm) ||
+            item.hex.toLowerCase().includes(searchTerm) ||
+            item.uuid.toLowerCase().includes(searchTerm)
+          )
+        : history;
+    
+    if (filtered.length === 0) {
+        container.innerHTML = '<p class="note">' + (history.length ? 'No matching results found.' : 'No lookup history yet.') + '</p>';
+        return;
+    }
+
+    container.innerHTML = filtered.map(item => `
+        <div class="history-item">
+            <div class="history-header">
+                <span>${escapeHtml(item.gamertag)}</span>
+                <span class="history-time">${new Date(item.timestamp).toLocaleString()}</span>
+            </div>
+            <span class="label">Decimal XUID</span>
+            <div class="value">
+                ${escapeHtml(item.xuid)}
+                <button class="copy-btn" onclick="copyText('${escapeHtml(item.xuid)}')">Copy</button>
+            </div>
+            <span class="label">Hex XUID</span>
+            <div class="value">
+                ${escapeHtml(item.hex)}
+                <button class="copy-btn" onclick="copyText('${escapeHtml(item.hex)}')">Copy</button>
+            </div>
+            <span class="label">Floodgate UUID</span>
+            <div class="value" style="font-size:0.8rem">
+                ${escapeHtml(item.uuid)}
+                <button class="copy-btn" onclick="copyText('${escapeHtml(item.uuid)}')">Copy</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function clearHistory() {
+    if (confirm('Clear all lookup history? This cannot be undone.')) {
+        localStorage.removeItem('lookupHistory');
+        renderHistory();
+    }
+}
+
+// --------------------------
 // Core App Functions
 // --------------------------
 function switchTab(tab) {
@@ -498,6 +604,9 @@ function switchTab(tab) {
     const activeBtn = document.querySelector(`.tab[onclick="switchTab('${tab}')"]`);
     if (activeBtn) activeBtn.classList.add('active');
     document.getElementById(`${tab}-tab`).classList.add('active');
+    
+    // Refresh history when opening tab
+    if (tab === 'history') renderHistory();
 }
 
 async function lookup() {
@@ -535,6 +644,9 @@ async function lookup() {
 
     const hex = BigInt(xuid).toString(16).toUpperCase().padStart(16, '0');
     const uuid = `00000000-0000-0000-${hex.slice(0,4)}-${hex.slice(4)}`.toLowerCase();
+
+    // Save successful lookup to history
+    saveToHistory({ gamertag, xuid, hex, uuid, source });
 
     textEl.innerHTML = `
         <span class="label">Gamertag</span>
@@ -605,96 +717,6 @@ function convert() {
     }
 }
 
-// --------------------------
-// NEW: Reverse Lookup Function
-// --------------------------
-async function reverseLookup() {
-    const input = document.getElementById('reverse-input').value.trim();
-    const resultEl = document.getElementById('reverse-result');
-    const textEl = document.getElementById('reverse-text');
-
-    if (!input) {
-        showResult(textEl, resultEl, '⚠️ Please enter an ID or UUID.', 'error');
-        return;
-    }
-
-    showResult(textEl, resultEl, '🔍 Searching...', '');
-
-    let decimalXuid = null;
-
-    // Detect and convert input format
-    if (/^\d+$/.test(input)) {
-        // Decimal XUID
-        decimalXuid = input;
-    } else if (/^[0-9A-Fa-f]{16}$/.test(input)) {
-        // Hex XUID
-        decimalXuid = BigInt('0x' + input).toString();
-    } else if (/^00000000-0000-0000-([0-9A-Fa-f]{4})-([0-9A-Fa-f]{12})$/i.test(input)) {
-        // Floodgate UUID
-        const hexPart = input.replace(/^00000000-0000-0000-/, '').replace(/-/, '');
-        decimalXuid = BigInt('0x' + hexPart).toString();
-    } else {
-        showResult(textEl, resultEl, '❌ Invalid format. Use Decimal XUID, Hex XUID, or Floodgate UUID.', 'error');
-        return;
-    }
-
-    let gamertag = null;
-    let source = '';
-
-    try {
-        const res1 = await fetch(`https://api.geysermc.org/v2/xbox/gamertag/${decimalXuid}`);
-        const data1 = await res1.json();
-        if (data1.gamertag) { gamertag = data1.gamertag; source = 'Geyser API'; }
-    } catch (e) {}
-
-    if (!gamertag) {
-        try {
-            const res2 = await fetch(`https://mcprofile.io/api/v1/bedrock/xuid/${decimalXuid}`);
-            const data2 = await res2.json();
-            if (data2.gamertag) { gamertag = data2.gamertag; source = 'MCProfile API'; }
-        } catch (e) {}
-    }
-
-    if (!gamertag) {
-        showResult(textEl, resultEl, '❌ No matching gamertag found in databases.', 'error');
-        return;
-    }
-
-    const hex = BigInt(decimalXuid).toString(16).toUpperCase().padStart(16, '0');
-    const uuid = `00000000-0000-0000-${hex.slice(0,4)}-${hex.slice(4)}`.toLowerCase();
-
-    textEl.innerHTML = `
-        <span class="label">Gamertag</span>
-        <div class="value">
-            ${escapeHtml(gamertag)}
-            <button class="copy-btn" onclick="copyText('${escapeHtml(gamertag)}')">Copy</button>
-        </div>
-
-        <span class="label">Source</span>
-        <div class="value">${escapeHtml(source)}</div>
-
-        <span class="label">Decimal XUID</span>
-        <div class="value">
-            ${escapeHtml(decimalXuid)}
-            <button class="copy-btn" onclick="copyText('${escapeHtml(decimalXuid)}')">Copy</button>
-        </div>
-
-        <span class="label">Hex XUID</span>
-        <div class="value">
-            ${escapeHtml(hex)}
-            <button class="copy-btn" onclick="copyText('${escapeHtml(hex)}')">Copy</button>
-        </div>
-
-        <span class="label">Floodgate UUID</span>
-        <div class="value" style="font-size:0.8rem">
-            ${escapeHtml(uuid)}
-            <button class="copy-btn" onclick="copyText('${escapeHtml(uuid)}')">Copy</button>
-        </div>
-    `;
-    resultEl.className = 'result success';
-    resultEl.style.display = 'block';
-}
-
 function showResult(elWrap, elBox, html, type) {
     elWrap.innerHTML = html;
     elBox.className = 'result ' + type;
@@ -703,7 +725,6 @@ function showResult(elWrap, elBox, html, type) {
 
 document.getElementById('gamertag').addEventListener('keydown', e => e.key === 'Enter' && lookup());
 document.getElementById('decimal-xuid').addEventListener('keydown', e => e.key === 'Enter' && convert());
-document.getElementById('reverse-input').addEventListener('keydown', e => e.key === 'Enter' && reverseLookup());
 </script>
 </body>
 </html>
